@@ -222,10 +222,22 @@ public class OciController {
         return ResponseData.successData(ociService.checkAlive());
     }
 
+    @PostMapping(path = "/checkAliveBatch")
+    public ResponseData<Void> checkAliveBatch(@Validated @RequestBody IdListParams params) {
+        ociService.checkAliveBatch(params);
+        return ResponseData.successData("测活已提交，正在异步检测中，稍后刷新可查看结果…");
+    }
+
     @PostMapping(path = "/refreshPlanTypeBatch")
     public ResponseData<Void> refreshPlanTypeBatch(@Validated @RequestBody IdListParams params) {
         ociService.refreshPlanTypeBatch(params);
         return ResponseData.successData("套餐类型刷新成功");
+    }
+
+    @PostMapping(path = "/refreshCfgBatch")
+    public ResponseData<Void> refreshCfgBatch(@Validated @RequestBody IdListParams params) {
+        ociService.refreshCfgBatch(params);
+        return ResponseData.successData("更新配置已提交，正在异步刷新套餐类型与账户状态…");
     }
 
     @PostMapping(path = "/startVnc")

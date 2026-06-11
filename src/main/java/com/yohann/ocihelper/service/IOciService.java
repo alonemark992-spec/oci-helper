@@ -81,11 +81,15 @@ public interface IOciService {
 
     String checkAlive();
 
+    void checkAliveBatch(IdListParams params);
+
     void updateCfgName(UpdateCfgNameParams params);
 
     void updateCfgProxy(UpdateCfgProxyParams params);
 
     void refreshPlanTypeBatch(IdListParams params);
+
+    void refreshCfgBatch(IdListParams params);
 
     String startVnc(StartVncParams params);
 

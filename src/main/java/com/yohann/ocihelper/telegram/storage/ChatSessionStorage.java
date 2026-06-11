@@ -132,7 +132,7 @@ public class ChatSessionStorage {
      * @return model name, or default model if not set
      */
     public String getModel(long chatId) {
-        return selectedModels.getOrDefault(chatId, "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B");
+        return selectedModels.getOrDefault(chatId, "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B");
     }
     
     /**

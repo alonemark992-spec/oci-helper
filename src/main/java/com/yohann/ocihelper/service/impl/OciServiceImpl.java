@@ -126,8 +126,12 @@ public class OciServiceImpl implements IOciService {
     @Override
     public Page<OciUserListRsp> userPage(GetOciUserListParams params) {
         long offset = (params.getCurrentPage() - 1) * params.getPageSize();
-        List<OciUserListRsp> list = userMapper.userPage(offset, params.getPageSize(), params.getKeyword(), params.getIsEnableCreate());
-        Long total = userMapper.userPageTotal(params.getKeyword(), params.getIsEnableCreate());
+        List<OciUserListRsp> list = userMapper.userPage(
+                offset, params.getPageSize(), params.getKeyword(), params.getIsEnableCreate(),
+                params.getPlanType(), params.getAccountStatus(), params.getSortOrder());
+        Long total = userMapper.userPageTotal(
+                params.getKeyword(), params.getIsEnableCreate(),
+                params.getPlanType(), params.getAccountStatus());
         list.parallelStream()
                 .forEach(x -> {
                     try {
@@ -178,9 +182,11 @@ public class OciServiceImpl implements IOciService {
                         .privateKeyPath(ociUser.getOciKeyPath())
                         .build())
                 .build();
-        // 仅做快速连通性校验，失败则直接拒绝
+        // Quick connectivity check — reject immediately on failure, and record account status
         try (OracleInstanceFetcher fetcher = new OracleInstanceFetcher(sysUserDTO)) {
             fetcher.getAvailabilityDomains();
+            // Alive check passed: mark account as ACTIVE
+            ociUser.setAccountStatus(AccountStatusEnum.ACTIVE.getCode());
         } catch (Exception e) {
             log.error("配置:[{}],区域:[{}],不生效,错误信息:[{}]",
                     ociUser.getUsername(), ociUser.getOciRegion(), e.getLocalizedMessage());
@@ -869,21 +875,62 @@ public class OciServiceImpl implements IOciService {
 
         String rst = "总配置数：%s ，失效配置数：%s ，有效配置数：%s。\n 失效配置：\n%s";
 
+        // Perform alive check and update accountStatus in DB at the same time
         List<String> failNames = ids.parallelStream().filter(id -> {
             SysUserDTO ociUser = getOciUser(id);
+            boolean failed;
             try (OracleInstanceFetcher fetcher = new OracleInstanceFetcher(ociUser)) {
                 fetcher.getAvailabilityDomains();
+                failed = false;
             } catch (Exception e) {
                 log.error("配置：[{}] 测活失败", ociUser.getUsername(), e);
-                return true;
+                failed = true;
             }
-            return false;
+            // Update accountStatus in DB
+            userService.update(new LambdaUpdateWrapper<OciUser>()
+                    .eq(OciUser::getId, id)
+                    .set(OciUser::getAccountStatus, failed
+                            ? AccountStatusEnum.INACTIVE.getCode()
+                            : AccountStatusEnum.ACTIVE.getCode()));
+            return failed;
         }).map(id -> getOciUser(id).getUsername()).collect(Collectors.toList());
 
         sysService.sendMessage(String.format("【API测活结果】\n\n✅ 有效配置数：%s\n❌ 失效配置数：%s\n\uD83D\uDD11 总配置数：%s\n⚠\uFE0F 失效配置：\n%s",
                 ids.size() - failNames.size(), failNames.size(), ids.size(), String.join("\n", failNames)));
 
         return String.format(rst, ids.size(), failNames.size(), ids.size() - failNames.size(), String.join(" , ", failNames));
+    }
+
+    @Override
+    public void checkAliveBatch(IdListParams params) {
+        List<OciUser> users = userService.listByIds(params.getIdList());
+        if (CollectionUtil.isEmpty(users)) {
+            return;
+        }
+        // Async: check alive and update accountStatus for each selected config
+        virtualExecutor.execute(() -> {
+            List<String> failNames = users.parallelStream().filter(ociUser -> {
+                SysUserDTO sysUserDTO = getOciUser(ociUser.getId());
+                boolean failed;
+                try (OracleInstanceFetcher fetcher = new OracleInstanceFetcher(sysUserDTO)) {
+                    fetcher.getAvailabilityDomains();
+                    failed = false;
+                } catch (Exception e) {
+                    log.error("配置：[{}] 测活失败", ociUser.getUsername(), e);
+                    failed = true;
+                }
+                // Update accountStatus in DB
+                userService.update(new LambdaUpdateWrapper<OciUser>()
+                        .eq(OciUser::getId, ociUser.getId())
+                        .set(OciUser::getAccountStatus, failed
+                                ? AccountStatusEnum.INACTIVE.getCode()
+                                : AccountStatusEnum.ACTIVE.getCode()));
+                return failed;
+            }).map(OciUser::getUsername).collect(Collectors.toList());
+
+            log.info("[CheckAliveBatch] 完成，共 {} 个配置，失效 {} 个",
+                    users.size(), failNames.size());
+        });
     }
 
     @Override
@@ -911,22 +958,45 @@ public class OciServiceImpl implements IOciService {
 
     @Override
     public void refreshPlanTypeBatch(IdListParams params) {
+        // Kept for backward compatibility; delegates to refreshCfgBatch
+        refreshCfgBatch(params);
+    }
+
+    @Override
+    public void refreshCfgBatch(IdListParams params) {
         List<OciUser> users = userService.listByIds(params.getIdList());
-        List<OciUser> toUpdate = users.parallelStream().map(ociUser -> {
-            SysUserDTO sysUserDTO = getOciUser(ociUser.getId());
-            try (OracleInstanceFetcher fetcher = new OracleInstanceFetcher(sysUserDTO)) {
-                com.oracle.bmc.ospgateway.model.Subscription sub = fetcher.getSubscriptionInfo();
-                if (sub != null && sub.getPlanType() != null) {
-                    ociUser.setPlanType(sub.getPlanType().getValue());
-                    log.info("[RefreshPlanType] user:[{}] updated planType to [{}]",
-                            ociUser.getUsername(), sub.getPlanType().getValue());
+        // Async: update plan type AND account status for each selected config
+        virtualExecutor.execute(() -> {
+            List<OciUser> toUpdate = users.parallelStream().map(ociUser -> {
+                SysUserDTO sysUserDTO = getOciUser(ociUser.getId());
+                boolean alive = true;
+                try (OracleInstanceFetcher fetcher = new OracleInstanceFetcher(sysUserDTO)) {
+                    // Alive check
+                    fetcher.getAvailabilityDomains();
+                    // Update plan type
+                    try {
+                        com.oracle.bmc.ospgateway.model.Subscription sub = fetcher.getSubscriptionInfo();
+                        if (sub != null && sub.getPlanType() != null) {
+                            ociUser.setPlanType(sub.getPlanType().getValue());
+                            log.info("[RefreshCfg] user:[{}] updated planType to [{}]",
+                                    ociUser.getUsername(), sub.getPlanType().getValue());
+                        }
+                    } catch (Exception e) {
+                        log.warn("[RefreshCfg] user:[{}] fetch planType failed: {}", ociUser.getUsername(), e.getMessage());
+                    }
+                } catch (Exception e) {
+                    log.warn("[RefreshCfg] user:[{}] alive check failed: {}", ociUser.getUsername(), e.getMessage());
+                    alive = false;
                 }
-            } catch (Exception e) {
-                log.warn("[RefreshPlanType] user:[{}] failed: {}", ociUser.getUsername(), e.getMessage());
-            }
-            return ociUser;
-        }).collect(Collectors.toList());
-        userService.updateBatchById(toUpdate);
+                // Set account status based on alive check result
+                ociUser.setAccountStatus(alive
+                        ? AccountStatusEnum.ACTIVE.getCode()
+                        : AccountStatusEnum.INACTIVE.getCode());
+                return ociUser;
+            }).collect(Collectors.toList());
+            userService.updateBatchById(toUpdate);
+            log.info("[RefreshCfg] batch update completed for {} configs", toUpdate.size());
+        });
     }
 
     @Override

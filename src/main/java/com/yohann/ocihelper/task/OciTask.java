@@ -144,6 +144,7 @@ public class OciTask implements ApplicationRunner {
         sqLiteHelper.addColumnIfNotExists("oci_user", "plan_type", "VARCHAR(32) NULL");
         sqLiteHelper.addColumnIfNotExists("oci_create_task", "paused", "INTEGER DEFAULT 0");
         sqLiteHelper.addColumnIfNotExists("oci_user", "proxy", "VARCHAR(256) NULL");
+        sqLiteHelper.addColumnIfNotExists("oci_user", "account_status", "VARCHAR(16) NULL");
         virtualExecutor.execute(() -> {
             List<OciUser> ociUsers = userService.list(new LambdaQueryWrapper<OciUser>()
                     .isNull(OciUser::getTenantCreateTime)

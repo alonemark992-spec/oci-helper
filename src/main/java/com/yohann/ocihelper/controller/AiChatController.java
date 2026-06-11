@@ -126,7 +126,7 @@ public class AiChatController {
                                   @RequestParam("sessionId") String sessionId,
                                   @RequestParam("enableInternet") Boolean enableInternet) {
         String baseUrl = "https://api.siliconflow.cn";
-        String defaultModel = "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B";
+        String defaultModel = "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B";
         String apiKey;
         apiKey = (String) customCache.get(SysCfgEnum.SILICONFLOW_AI_API.getCode());
         if (StringUtils.isBlank(apiKey)) {

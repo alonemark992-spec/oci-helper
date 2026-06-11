@@ -4,9 +4,11 @@ import cn.hutool.core.collection.CollectionUtil;
 import cn.hutool.core.util.StrUtil;
 import cn.hutool.extra.spring.SpringUtil;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.yohann.ocihelper.bean.dto.SysUserDTO;
 import com.yohann.ocihelper.bean.entity.OciCreateTask;
 import com.yohann.ocihelper.bean.entity.OciUser;
+import com.yohann.ocihelper.enums.AccountStatusEnum;
 import com.yohann.ocihelper.bean.response.oci.traffic.FetchInstancesRsp;
 import com.yohann.ocihelper.config.OracleInstanceFetcher;
 import com.yohann.ocihelper.service.IOciCreateTaskService;
@@ -41,28 +43,38 @@ public class TelegramBotService {
      * 
      * @return 结果消息
      */
-    public String checkAlive() {
+        public String checkAlive() {
         ISysService sysService = SpringUtil.getBean(ISysService.class);
         IOciUserService userService = SpringUtil.getBean(IOciUserService.class);
-        
+
         List<String> ids = userService.listObjs(new LambdaQueryWrapper<OciUser>()
                 .isNotNull(OciUser::getId)
                 .select(OciUser::getId), String::valueOf);
-        
+
         if (CollectionUtil.isEmpty(ids)) {
             return "暂无配置";
         }
-        
+
+        // Perform alive check and update accountStatus in DB simultaneously
         List<String> failNames = ids.parallelStream().filter(id -> {
             SysUserDTO ociUser = sysService.getOciUser(id);
+            boolean failed;
             try (OracleInstanceFetcher fetcher = new OracleInstanceFetcher(ociUser)) {
                 fetcher.getAvailabilityDomains();
+                failed = false;
             } catch (Exception e) {
-                return true;
+                log.error("配置：[{}] 测活失败", ociUser.getUsername(), e);
+                failed = true;
             }
-            return false;
+            // Persist account status
+            userService.update(new LambdaUpdateWrapper<OciUser>()
+                    .eq(OciUser::getId, id)
+                    .set(OciUser::getAccountStatus, failed
+                            ? AccountStatusEnum.INACTIVE.getCode()
+                            : AccountStatusEnum.ACTIVE.getCode()));
+            return failed;
         }).map(id -> sysService.getOciUser(id).getUsername()).collect(Collectors.toList());
-        
+
         return String.format(
                 "【API测活结果】\n\n" +
                 "✅ 有效配置数：%s\n" +

@@ -166,7 +166,7 @@ class AiSetModelHandler extends AbstractCallbackHandler {
         String displayName;
         
         if (callbackData.contains("deepseek_r1")) {
-            modelName = "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B";
+            modelName = "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B";
             displayName = "DeepSeek-R1";
         } else if (callbackData.contains("deepseek_v3")) {
             modelName = "deepseek-ai/DeepSeek-V3";
@@ -175,7 +175,7 @@ class AiSetModelHandler extends AbstractCallbackHandler {
             modelName = "Qwen/Qwen2.5-7B-Instruct";
             displayName = "Qwen-2.5";
         } else {
-            modelName = "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B";
+            modelName = "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B";
             displayName = "DeepSeek-R1";
         }
         
